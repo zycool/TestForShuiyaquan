@@ -84,15 +84,14 @@ class TestStrategy(bt.Strategy):
 
 
 if __name__ == '__main__':
-    # 股票池
-    stock_list = ['000001', '000002', '000004', ]
     start_cash = 1000000
     cerebro = bt.Cerebro()
     cerebro.addstrategy(TestStrategy)
 
     client = pymongo.MongoClient('mongodb://localhost:27017/')
     stock_db = client['stock_day']
-
+    # 股票池
+    stock_list = ['000001', ]
     for stock in stock_list:
         table = stock_db[stock]
         df = pd.DataFrame(table.find())
@@ -106,7 +105,6 @@ if __name__ == '__main__':
                                    todate=datetime.datetime(2023, 2, 22),
                                    )
         cerebro.adddata(data, name=stock)
-
     client.close()
 
     # broker设置资金、手续费
@@ -114,9 +112,37 @@ if __name__ == '__main__':
     cerebro.broker.setcommission(commission=0.0015)
     # 设置买入设置，固定买卖数量
     cerebro.addsizer(bt.sizers.FixedSize, stake=100)
-    cerebro.run()
+    # 添加分析指标
+    # 返回年初至年末的年度收益率
+    cerebro.addanalyzer(bt.analyzers.AnnualReturn, _name='_AnnualReturn')
+    # 计算最大回撤相关指标
+    cerebro.addanalyzer(bt.analyzers.DrawDown, _name='_DrawDown')
+    # 计算年化收益：日度收益
+    cerebro.addanalyzer(bt.analyzers.Returns, _name='_Returns', tann=252)
+    # 计算年化夏普比率：日度收益
+    cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='_SharpeRatio', timeframe=bt.TimeFrame.Days, annualize=True,
+                        riskfreerate=0)  # 计算夏普比率
+    cerebro.addanalyzer(bt.analyzers.SharpeRatio_A, _name='_SharpeRatio_A')
+    # 返回收益率时序
+    cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='_TimeReturn')
+
+    result = cerebro.run()
+
     print("股票池：", stock_list)
     print('初始资金: %.2f , 最终的资金: %.2f' % (start_cash, cerebro.broker.getvalue()))
+    # 常用指标提取
+    analyzer = {}
+    # 提取年化收益
+    analyzer['年化收益率'] = result[0].analyzers._Returns.get_analysis()['rnorm']
+    analyzer['年化收益率（%）'] = result[0].analyzers._Returns.get_analysis()['rnorm100']
+    # 提取最大回撤
+    analyzer['最大回撤（%）'] = result[0].analyzers._DrawDown.get_analysis()['max']['drawdown'] * (-1)
+    # 提取夏普比率
+    analyzer['年化夏普比率'] = result[0].analyzers._SharpeRatio_A.get_analysis()['sharperatio']
+    # 日度收益率序列
+    ret = pd.Series(result[0].analyzers._TimeReturn.get_analysis())
+    print(analyzer)
+    print(ret)
 
     b = Bokeh(style='bar', plot_mode='single', scheme=Tradimo())
     cerebro.plot(b)
